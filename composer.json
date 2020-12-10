@@ -1,0 +1,28 @@
+{
+  "name": "gglnx/extract-craft-translations",
+  "description": "Extract translations from Craft CMS files (php, twig and js)",
+  "type": "project",
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "Dennis Morhardt",
+      "email": "info@dennismorhardt.de"
+    }
+  ],
+  "bin": [
+    "bin/extract-craft-translations"
+  ],
+  "autoload": {
+    "psr-4": {
+      "gglnx\\ExtractCraftTranslations\\": "src/"
+    }
+  },
+  "require": {
+    "gettext/gettext": "^5.2",
+    "mnapoli/silly": "^1.7",
+    "nikic/php-parser": "^4.3"
+  },
+  "require-dev": {
+    "squizlabs/php_codesniffer": "3.*"
+  }
+}
