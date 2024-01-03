@@ -2,7 +2,7 @@
 
 /**
  * @author Dennis Morhardt <info@dennismorhardt.de>
- * @copyright 2020 Dennis Morhardt
+ * @copyright 2024 Dennis Morhardt
  */
 
 namespace gglnx\ExtractCraftTranslations;
@@ -16,5 +16,4 @@ use RuntimeException;
  */
 class Exception extends RuntimeException
 {
-
 }

@@ -2,7 +2,7 @@
 
 /**
  * @author Dennis Morhardt <info@dennismorhardt.de>
- * @copyright 2020 Dennis Morhardt
+ * @copyright 2024 Dennis Morhardt
  */
 
 namespace gglnx\ExtractCraftTranslations\Loader;
@@ -23,7 +23,7 @@ final class PhpArrayLoader extends Loader
      * @inheritdoc
      * @throws Exception If parsing of string failed.
      */
-    public function loadString(string $string, Translations $translations = null): Translations
+    public function loadString(string $string, ?Translations $translations = null): Translations
     {
         try {
             $messages = eval($string);
@@ -57,19 +57,25 @@ final class PhpArrayLoader extends Loader
     /**
      * Converts a message array into translations.
      *
-     * @param array $messages Input array with translated messages.
+     * @param array<string, string> $messages Input array with translated messages.
      * @param Translations|null $translations Base translation object.
      * @return Translations
      */
     private function convertMessagesToTranslations(
         array $messages = [],
-        Translations $translations = null
+        ?Translations $translations = null,
     ): Translations {
         $translations = $translations ?: $this->createTranslations();
         foreach ($messages as $originalString => $translationString) {
             $translation = $this->createTranslation(null, $originalString);
-            $translation->translate($translationString);
-            $translations->add($translation);
+
+            if ($translation) {
+                if ($translationString) {
+                    $translation->translate($translationString);
+                }
+
+                $translations->add($translation);
+            }
         }
 
         return $translations;
