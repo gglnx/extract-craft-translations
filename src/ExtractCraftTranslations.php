@@ -38,7 +38,7 @@ class ExtractCraftTranslations
      */
     private $extractors = [
         'twig' => ['twig', 'html'],
-        'js' => ['js', 'jsx', 'ts', 'tsx', '.vue'],
+        'js' => ['js', 'jsx'],
         'php' => ['php'],
     ];
 
