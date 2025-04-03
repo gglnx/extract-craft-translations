@@ -8,6 +8,8 @@
 namespace gglnx\ExtractCraftTranslations;
 
 use Gettext\Translation;
+use Gettext\Translations;
+use gglnx\ExtractCraftTranslations\Iterator\IgnoredFilterIterator;
 use Peast\Peast;
 use Peast\Syntax\Node\CallExpression;
 use Peast\Syntax\Node\Identifier as NodeIdentifier;
@@ -17,14 +19,23 @@ use Peast\Syntax\Node\StringLiteral;
 use Peast\Traverser;
 use PhpParser\Node;
 use PhpParser\Node\Arg;
+use PhpParser\Node\Expr\BinaryOp\Concat;
 use PhpParser\Node\Expr\StaticCall;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
 use PhpParser\Node\Scalar\String_;
+use PhpParser\Node\VariadicPlaceholder;
 use PhpParser\NodeFinder;
 use PhpParser\ParserFactory;
 use Symfony\Component\Filesystem\Path;
 use Symfony\Component\Finder\Finder;
+use Symfony\Component\Yaml\Parser;
+use Twig\Environment;
+use Twig\Loader\ArrayLoader;
+use Twig\Source;
+use Twig\Token;
+use Twig\TwigFilter;
+use Twig\TwigFunction;
 
 /**
  * Extracts translations from Craft
@@ -33,6 +44,8 @@ use Symfony\Component\Finder\Finder;
  */
 class ExtractCraftTranslations
 {
+    public const UUID_PATTERN = '[A-Za-z0-9]{8}-[A-Za-z0-9]{4}-4[A-Za-z0-9]{3}-[89abAB][A-Za-z0-9]{3}-[A-Za-z0-9]{12}';
+
     /**
      * @var string[][]
      */
@@ -40,6 +53,39 @@ class ExtractCraftTranslations
         'twig' => ['twig', 'html'],
         'js' => ['js', 'jsx'],
         'php' => ['php'],
+        'yaml' => ['yml', 'yaml'],
+    ];
+
+    private array $projectConfigSearchPatterns = [
+        '/^elementSources.\S+?.\S+?.heading$/',
+        '/fieldLayouts.\S+?.tabs.\S+?.elements.\S+?.label$/',
+        '/fieldLayouts.\S+?.tabs.\S+?.elements.\S+?.instructions$/',
+        '/fieldLayouts.\S+?.tabs.\S+?.elements.\S+?.warning$/',
+        '/fieldLayouts.\S+?.tabs.\S+?.elements.\S+?.tip$/',
+        '/fieldLayouts.\S+?.tabs.\S+?.name$/',
+        '/^sections.\S+?.name$/',
+        '/^entryTypes.\S+?.name$/',
+        '/^fields.\S+?.instructions$/',
+        '/^fields.\S+?.name$/',
+        '/^fields.\S+?.settings.createButtonLabel$/',
+        '/^fields.\S+?.settings.addRowLabel$/',
+        '/^fields.\S+?.settings.selectionLabel$/',
+        '/^fields.\S+?.settings.offLabel$/',
+        '/^fields.\S+?.settings.onLabel$/',
+        '/^fields.\S+?.settings.placeholder$/',
+        '/^formie.stencils.\S+?.name$/',
+    ];
+
+    private array $projectConfigSearchPatternsAssoc = [
+        '/^fields.\S+?.settings.columns.__assoc__.\S+?.1.__assoc__.\S+?.0$/' => ['heading'],
+        '/^fields.\S+?.settings.entryTypes.\S+?.__assoc__.\S+?.0$/' => ['name'],
+        '/^fields.\S+?.settings.linkTypes.(.+).__assoc__.\S+?.0?$/' => [
+            'label', 'name', 'placeholder', 'instructions', 'warning', 'tip',
+        ],
+    ];
+
+    private array $projectConfigSearchPatternsTwig = [
+        '/^entryTypes.\S+?.titleFormat$/',
     ];
 
     /**
@@ -50,6 +96,7 @@ class ExtractCraftTranslations
     public function __construct(
         private string $defaultCategory = 'site',
         private ?string $baseReferencePath = null,
+        private ?string $projectConfigPath = null,
     ) {
     }
 
@@ -59,9 +106,9 @@ class ExtractCraftTranslations
      * @param string $file Path to file
      * @param string $category Message category
      * @throws Exception if file don't exists or is a folder
-     * @return SortableTranslations All found translations
+     * @return SortableTranslations|null All found translations
      */
-    public function extractFromFile(string $file, ?string $category = null): SortableTranslations
+    public function extractFromFile(string $file, ?string $category = null): ?SortableTranslations
     {
         // Check if file exists or is a folder
         if (!file_exists($file) || is_dir($file)) {
@@ -71,17 +118,19 @@ class ExtractCraftTranslations
         // Get file extensions
         $fileExtension = pathinfo($file, PATHINFO_EXTENSION);
 
-        // Get contents
-        $contents = file_get_contents($file) ?:
-            throw new Exception(sprintf('%s couldn\'t be opended.', $file));
-
         // Extract
         if (in_array($fileExtension, $this->extractors['php'])) {
-            return $this->extractFromPhp($contents, $file, $category);
+            return $this->extractFromPhp(file_get_contents($file) ?: '', $file, $category);
         } elseif (in_array($fileExtension, $this->extractors['js'])) {
-            return $this->extractFromJs($contents, $file, $category);
+            return $this->extractFromJs(file_get_contents($file) ?: '', $file, $category);
         } elseif (in_array($fileExtension, $this->extractors['twig'])) {
-            return $this->extractFromTwig($contents, $file, $category);
+            return $this->extractFromTwig(file_get_contents($file) ?: '', $file, $category);
+        } elseif (in_array($fileExtension, $this->extractors['yaml'])) {
+            if (!$this->projectConfigPath || !Path::isBasePath($this->projectConfigPath, $file)) {
+                return null;
+            }
+
+            return $this->extractFromProjectConfig(file_get_contents($file) ?: '', $file, $category);
         } else {
             // No matching extractor found
             throw new Exception(sprintf('No matching extractor for %s found.', $fileExtension));
@@ -98,16 +147,11 @@ class ExtractCraftTranslations
     public function extractFromFiles(array $files, ?string $category = null): SortableTranslations
     {
         // Get all translations
-        $translationsFromFiles = array_filter(array_map(function ($file) use ($category) {
-            return $this->extractFromFile($file, $category);
-        }, $files));
-
-        // Flatten
-        $translations = array_reduce($translationsFromFiles, function ($allTranslations, $translations) {
-            return $allTranslations->mergeWith($translations);
-        }, SortableTranslations::create($category));
-
-        return $translations;
+        return array_reduce(
+            array_map(fn (string $file) => $this->extractFromFile($file, $category), $files),
+            fn (SortableTranslations $all, ?SortableTranslations $file) => $file ? $all->mergeWith($file) : $all,
+            SortableTranslations::create($category),
+        );
     }
 
     /**
@@ -129,16 +173,97 @@ class ExtractCraftTranslations
             ->in($path)
             ->ignoreUnreadableDirs()
             ->files()
+            ->ignoreVCS(true)
             ->ignoreVCSIgnored(true)
             ->name('/^.+\.(' . $fileExtensions . ')$/i');
 
+        $iterator = new IgnoredFilterIterator($finder->getIterator(), $path);
+
         // Get all files
         $files = [];
-        foreach ($finder as $file) {
+        foreach ($iterator as $file) {
             $files[] = $file->getRealPath();
         }
 
         return $this->extractFromFiles($files, $category);
+    }
+
+    private function extractFromProjectConfig(
+        string $contents,
+        string $file,
+        ?string $category = null,
+    ): ?SortableTranslations {
+        if (!$this->projectConfigPath) {
+            return null;
+        }
+
+        $relativePath = substr($file, strlen($this->projectConfigPath) + 1);
+        $filename = Path::getFilenameWithoutExtension($relativePath);
+
+        if (preg_match('/^\w+--(' . self::UUID_PATTERN . ')$/', $filename, $match)) {
+            $basePath = $match[1];
+        } else {
+            $basePath = $filename;
+        }
+
+        if (str_contains($relativePath, DIRECTORY_SEPARATOR)) {
+            $configPath = explode(DIRECTORY_SEPARATOR, dirname($relativePath));
+            $basePath = implode('.', $configPath) . '.' . $basePath;
+        } else {
+            $basePath = '';
+        }
+
+        $translations = SortableTranslations::create($category);
+        $contents = (new Parser())->parse($contents);
+
+        /** @var array<string, mixed> */
+        $values = [];
+
+        $this->flattenConfigArray($contents, $basePath, $values);
+
+        foreach ($values as $path => $value) {
+            if (!is_string($value) || empty($value)) {
+                continue;
+            }
+
+            foreach ($this->projectConfigSearchPatterns as $searchPattern) {
+                if (preg_match($searchPattern, $path)) {
+                    $this->addTranslation(
+                        translations: $translations,
+                        message: $value,
+                        file: $file,
+                    );
+                }
+            }
+
+            foreach ($this->projectConfigSearchPatternsAssoc as $searchPattern => $keys) {
+                if (preg_match($searchPattern, $path)) {
+                    foreach ($keys as $key) {
+                        if ($key === $value) {
+                            $assocValuePath = preg_replace('/0$/', '1', $path);
+                            $assocValue = $values[$assocValuePath] ?? null;
+
+                            if ($assocValue) {
+                                $this->addTranslation(
+                                    translations: $translations,
+                                    message: $assocValue,
+                                    file: $file,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            foreach ($this->projectConfigSearchPatternsTwig as $searchPattern) {
+                if (preg_match($searchPattern, $path)) {
+                    $twigTranslations = $this->extractFromTwig($value, $file, $category);
+                    $translations->mergeWith($twigTranslations);
+                }
+            }
+        }
+
+        return $translations;
     }
 
     /**
@@ -184,33 +309,34 @@ class ExtractCraftTranslations
                 $messageCategory = (string) $translateFunctionCall->args[0]->value->value;
             }
 
-            // Skip if message is not a string
+            // Get message
             $messageArg = $translateFunctionCall->args[1];
-            if (!($messageArg instanceof Arg) || !($messageArg->value instanceof String_)) {
+
+            if ($messageArg instanceof VariadicPlaceholder) {
                 continue;
             }
 
-            // Skip if category doesn't matches
-            if ($category && $category !== $messageCategory) {
+            $message = null;
+
+            if ($messageArg->value instanceof String_) {
+                $message = $messageArg->value->value;
+            }
+
+            if ($messageArg->value instanceof Concat) {
+                $message = $this->resolveConcatedStrings($messageArg->value);
+            }
+
+            // Skip if message is empty or category doesn't matches
+            if (!$message || $category && $category !== $messageCategory) {
                 continue;
             }
 
-            // Get message and line number
-            $message = (string) $messageArg->value->value;
-            $lineNumber = $translateFunctionCall->class->getStartLine();
-
-            // Find or create translation
-            $translation = $translations->find(null, $message) ?? Translation::create(null, $message);
-
-            // Add reference
-            if ($this->baseReferencePath) {
-                $file = Path::makeRelative($file, $this->baseReferencePath);
-            }
-
-            $translation->getReferences()->add($file, $lineNumber);
-
-            // Add to translations
-            $translations->add($translation);
+            $this->addTranslation(
+                translations: $translations,
+                message: $message,
+                file: $file,
+                lineNumber: $translateFunctionCall->class->getStartLine(),
+            );
         }
 
         // Return translations
@@ -231,7 +357,9 @@ class ExtractCraftTranslations
         $translations = SortableTranslations::create($category);
 
         // Parse ast
-        $ast = Peast::latest($contents)->parse();
+        $ast = Peast::latest($contents, [
+            'sourceType' => Peast::SOURCE_TYPE_MODULE,
+        ])->parse();
 
         $traverser = new Traverser();
         $traverser->addFunction(function (PeastNode $node) use ($translations, $category, $file) {
@@ -271,21 +399,12 @@ class ExtractCraftTranslations
                     return;
                 }
 
-                $message = (string) $messageArg->getValue();
-                $lineNumber = $callee->getLocation()->getStart()->getLine();
-
-                // Find or create translation
-                $translation = $translations->find(null, $message) ?? Translation::create(null, $message);
-
-                // Add reference
-                if ($this->baseReferencePath) {
-                    $file = Path::makeRelative($file, $this->baseReferencePath);
-                }
-
-                $translation->getReferences()->add($file, $lineNumber);
-
-                // Add to translations
-                $translations->add($translation);
+                $this->addTranslation(
+                    translations: $translations,
+                    message: (string) $messageArg->getValue(),
+                    file: $file,
+                    lineNumber: $callee->getLocation()->getStart()->getLine(),
+                );
             }
         });
 
@@ -307,6 +426,67 @@ class ExtractCraftTranslations
     {
         // Get matches per extension
         $translations = SortableTranslations::create($category);
+
+        // Prepare twig environment
+        $twig = new Environment(new ArrayLoader());
+        $twig->registerUndefinedFilterCallback(fn (string $name) => new TwigFilter($name));
+        $twig->registerUndefinedFunctionCallback(fn (string $name) => new TwigFunction($name));
+
+        // Tokenize input
+        $stream = $twig->tokenize(new Source($contents, basename($file), dirname($file)));
+
+        // Parse template
+        while (!$stream->isEOF()) {
+            $token = $stream->next();
+
+            // Get registerTranslations values
+            if ($token->test(Token::NAME_TYPE, 'registerTranslations')) {
+                // Open function
+                $stream->expect(Token::PUNCTUATION_TYPE, '(');
+
+                // Check for category
+                $categoryToken = $stream->next();
+                if ($category && !$categoryToken->test(Token::STRING_TYPE, $category)) {
+                    continue;
+                }
+
+                // Open array
+                $stream->expect(Token::PUNCTUATION_TYPE, ',');
+                $stream->expect(Token::PUNCTUATION_TYPE, '[');
+
+                /** @var bool $first */
+                $first = true;
+                while (!$stream->test(Token::PUNCTUATION_TYPE, ']')) {
+                    // Check for array correctness
+                    if (!$first) {
+                        $stream->expect(Token::PUNCTUATION_TYPE, ',');
+
+                        if ($stream->getCurrent()->test(Token::PUNCTUATION_TYPE, ']')) {
+                            break;
+                        }
+                    }
+
+                    $first = false;
+
+                    // Find or create translation
+                    $messageToken = $stream->expect(Token::STRING_TYPE);
+                    $message = $messageToken->getValue();
+                    $translation = $translations->find(null, $message) ?? Translation::create(null, $message);
+
+                    // Add reference
+                    if ($this->baseReferencePath) {
+                        $file = Path::makeRelative($file, $this->baseReferencePath);
+                    }
+
+                    $translation->getReferences()->add($file, $messageToken->getLine());
+
+                    // Add to translations
+                    $translations->add($translation);
+                }
+
+                $stream->expect(Token::PUNCTUATION_TYPE, ']', 'An opened array is not properly closed');
+            }
+        }
 
         // Matches all |t and |translate filters and Craft.t() calls
         $regexes = [
@@ -333,29 +513,39 @@ class ExtractCraftTranslations
             $messageCategory = $match[4][0] ?? $this->defaultCategory;
             $message = stripcslashes((string) $match[2][0]);
             $position = $match[2][1];
-            $lineNumber = $this->getLineNumber($contents, $position);
 
             // Skip if category doesn't matches
             if ($category && $category !== $messageCategory) {
                 continue;
             }
 
-            // Find or create translation
-            $translation = $translations->find(null, $message) ?? Translation::create(null, $message);
-
-            // Add reference
-            if ($this->baseReferencePath) {
-                $file = Path::makeRelative($file, $this->baseReferencePath);
-            }
-
-            $translation->getReferences()->add($file, $lineNumber);
-
-            // Add to translations
-            $translations->add($translation);
+            $this->addTranslation(
+                translations: $translations,
+                message: $message,
+                file: $file,
+                lineNumber: $this->getLineNumber($contents, $position),
+            );
         }
 
         // Return translations
         return $translations;
+    }
+
+    private function addTranslation(
+        Translations $translations,
+        string $message,
+        string $file,
+        ?int $lineNumber = null,
+    ): void {
+        $translation = $translations->find(null, $message) ?? Translation::create(null, $message);
+
+        if ($this->baseReferencePath) {
+            $file = Path::makeRelative($file, $this->baseReferencePath);
+        }
+
+        $translation->getReferences()->add($file, $lineNumber);
+
+        $translations->add($translation);
     }
 
     /**
@@ -368,5 +558,47 @@ class ExtractCraftTranslations
     private function getLineNumber(string $contents, int $position): int
     {
         return substr_count(mb_substr($contents, 0, $position), PHP_EOL) + 1;
+    }
+
+    /**
+     * Resolves concacted strings
+     *
+     * @param Concat $node
+     * @return null|string
+     */
+    private function resolveConcatedStrings(Concat $node): ?string
+    {
+        $result = '';
+
+        if ($node->left instanceof String_) {
+            $result .= $node->left->value;
+        } elseif ($node->left instanceof Concat) {
+            $result .= $this->resolveConcatedStrings($node->left);
+        } else {
+            return null;
+        }
+
+        if ($node->right instanceof String_) {
+            $result .= $node->right->value;
+        } elseif ($node->right instanceof Concat) {
+            $result .= $this->resolveConcatedStrings($node->right);
+        } else {
+            return null;
+        }
+
+        return $result;
+    }
+
+    private function flattenConfigArray(array $array, string $path, array &$result): void
+    {
+        foreach ($array as $key => $value) {
+            $thisPath = ltrim($path . '.' . $key, '.');
+
+            if (is_array($value)) {
+                $this->flattenConfigArray($value, $thisPath, $result);
+            } else {
+                $result[$thisPath] = $value;
+            }
+        }
     }
 }

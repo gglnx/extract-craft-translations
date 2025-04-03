@@ -18,6 +18,7 @@ use gglnx\ExtractCraftTranslations\Generator\CsvGenerator;
 use gglnx\ExtractCraftTranslations\Generator\PhpArrayGenerator;
 use gglnx\ExtractCraftTranslations\Loader\PhpArrayLoader;
 use InvalidArgumentException;
+use Symfony\Component\Finder\Finder;
 
 /**
  * CLI application
@@ -42,7 +43,10 @@ class Cli
     ): bool {
         // Extract all translations
         $baseReferencePath = is_dir($source) ? $source : dirname($source);
-        $extractCraftTranslations = new ExtractCraftTranslations(baseReferencePath: $baseReferencePath);
+        $extractCraftTranslations = new ExtractCraftTranslations(
+            baseReferencePath: $baseReferencePath,
+            projectConfigPath: $this->getProjectConfigPath($baseReferencePath),
+        );
 
         if (is_dir($source)) {
             $translations = $extractCraftTranslations->extractFromFolder($source, $category);
@@ -91,7 +95,10 @@ class Cli
 
         // Extract all translations
         $baseReferencePath = is_dir($source) ? $source : dirname($source);
-        $extractCraftTranslations = new ExtractCraftTranslations(baseReferencePath: $baseReferencePath);
+        $extractCraftTranslations = new ExtractCraftTranslations(
+            baseReferencePath: $baseReferencePath,
+            projectConfigPath: $this->getProjectConfigPath($baseReferencePath),
+        );
 
         if (is_dir($source)) {
             $translations = $extractCraftTranslations->extractFromFolder($source, $category);
@@ -270,5 +277,16 @@ class Cli
 
         // Nothing found.
         throw new InvalidArgumentException(sprintf('%s is an invalid format', $format));
+    }
+
+    private function getProjectConfigPath(string $path): ?string
+    {
+        $finder = (new Finder())->files()->in($path)->name('project.yaml')->path('project');
+
+        foreach ($finder as $file) {
+            return $file->getPath();
+        }
+
+        return null;
     }
 }
