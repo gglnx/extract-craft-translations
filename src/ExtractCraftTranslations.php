@@ -159,10 +159,14 @@ class ExtractCraftTranslations
      *
      * @param string $path Path to the folder to scan
      * @param string $category Message category
+     * @param string[] $ignoredPaths
      * @return SortableTranslations All translations
      */
-    public function extractFromFolder(string $path, ?string $category = null): SortableTranslations
-    {
+    public function extractFromFolder(
+        string $path,
+        ?string $category = null,
+        array $ignoredPaths = [],
+    ): SortableTranslations {
         // Get file extensions
         $fileExtensions = implode('|', array_reduce($this->extractors, function ($allExtensions, $extensions) {
             return array_merge($allExtensions, $extensions);
@@ -182,7 +186,9 @@ class ExtractCraftTranslations
         // Get all files
         $files = [];
         foreach ($iterator as $file) {
-            $files[] = $file->getRealPath();
+            if (!in_array($file->getRealPath(), $ignoredPaths)) {
+                $files[] = $file->getRealPath();
+            }
         }
 
         return $this->extractFromFiles($files, $category);

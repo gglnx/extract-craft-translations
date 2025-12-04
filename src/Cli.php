@@ -101,7 +101,7 @@ class Cli
         );
 
         if (is_dir($source)) {
-            $translations = $extractCraftTranslations->extractFromFolder($source, $category);
+            $translations = $extractCraftTranslations->extractFromFolder($source, $category, [$inputOutputFile]);
         } elseif (is_file($source)) {
             $translations = $extractCraftTranslations->extractFromFile($source, $category);
         } else {
