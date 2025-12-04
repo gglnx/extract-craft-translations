@@ -19,13 +19,18 @@ use Peast\Syntax\Node\StringLiteral;
 use Peast\Traverser;
 use PhpParser\Node;
 use PhpParser\Node\Arg;
+use PhpParser\Node\Expr\Array_;
 use PhpParser\Node\Expr\BinaryOp\Concat;
+use PhpParser\Node\Expr\MethodCall;
 use PhpParser\Node\Expr\StaticCall;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
 use PhpParser\Node\Scalar\String_;
 use PhpParser\Node\VariadicPlaceholder;
 use PhpParser\NodeFinder;
+use PhpParser\NodeTraverser;
+use PhpParser\NodeVisitor;
+use PhpParser\NodeVisitorAbstract;
 use PhpParser\ParserFactory;
 use Symfony\Component\Filesystem\Path;
 use Symfony\Component\Finder\Finder;
@@ -352,6 +357,99 @@ class ExtractCraftTranslations
                 file: $file,
                 lineNumber: $translateFunctionCall->class->getStartLine(),
             );
+        }
+
+        // Multiple
+        /** @var MethodCall[] $registerTranslationsCalls */
+        $registerTranslationsCalls = $nodeFinder->find($ast, function (Node $node) {
+            return $node instanceof MethodCall
+                && $node->name instanceof Identifier
+                && $node->name->toString() === 'registerTranslations';
+        });
+
+        // Convert to translations
+        foreach ($registerTranslationsCalls as $registerTranslationsCall) {
+            // Get category
+            $messageCategory = $this->defaultCategory;
+            if (
+                $registerTranslationsCall->args[0] instanceof Arg &&
+                $registerTranslationsCall->args[0]->value instanceof String_
+            ) {
+                $messageCategory = (string) $registerTranslationsCall->args[0]->value->value;
+            }
+
+            // Skip if category doesn't matches
+            if ($category && $category !== $messageCategory) {
+                continue;
+            }
+
+            // Get messages
+            if (isset($registerTranslationsCall->args[1])) {
+                $messagesArg = $registerTranslationsCall->args[1];
+
+                if ($messagesArg instanceof VariadicPlaceholder) {
+                    continue;
+                }
+
+                if ($messagesArg->value instanceof Array_) {
+                    foreach ($messagesArg->value->items as $item) {
+                        $message = null;
+
+                        if ($item->value instanceof String_) {
+                            $message = $item->value->value;
+                        }
+
+                        if ($item->value instanceof Concat) {
+                            $message = $this->resolveConcatedStrings($item->value);
+                        }
+
+                        if ($message) {
+                            $this->addTranslation(
+                                translations: $translations,
+                                message: $message,
+                                file: $file,
+                                lineNumber: $item->getStartLine(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Strings with twig templates
+        $visitor = new class extends NodeVisitorAbstract {
+            /** @var list<String_|Concat> Found nodes */
+            public array $foundNodes = [];
+
+            public function enterNode(Node $node): ?int
+            {
+                if ($node instanceof String_ || $node instanceof Concat) {
+                    $this->foundNodes[] = $node;
+                    return NodeVisitor::DONT_TRAVERSE_CHILDREN;
+                }
+
+                return null;
+            }
+        };
+
+        $traverser = new NodeTraverser($visitor);
+        $traverser->traverse($ast);
+
+        foreach ($visitor->foundNodes as $node) {
+            $stringContents = $node instanceof Concat ? $this->resolveConcatedStrings($node) : $node->value;
+
+            if (empty($stringContents)) {
+                continue;
+            }
+
+            if (
+                (str_contains($stringContents, '{{') || str_contains($stringContents, '{%')) &&
+                preg_match('/(t|translate)\s*\(/', $stringContents)
+            ) {
+                $twigTranslations =
+                    $this->extractFromTwig($stringContents, $file, $category, $node->getStartLine());
+                $translations = $translations->mergeWith($twigTranslations);
+            }
         }
 
         // Return translations
