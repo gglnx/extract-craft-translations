@@ -7,12 +7,15 @@
 
 namespace gglnx\ExtractCraftTranslations\Iterator;
 
+use FilterIterator;
+use Iterator;
+use SplFileInfo;
 use Symfony\Component\Finder\Gitignore;
 
 /**
- * @extends \FilterIterator<string, \SplFileInfo>
+ * @extends FilterIterator<string, SplFileInfo, Iterator<string, SplFileInfo>>
  */
-final class IgnoredFilterIterator extends \FilterIterator
+final class IgnoredFilterIterator extends FilterIterator
 {
     private string $baseDir;
 
@@ -27,9 +30,9 @@ final class IgnoredFilterIterator extends \FilterIterator
     private array $ignoredPathsCache = [];
 
     /**
-     * @param \Iterator<string, \SplFileInfo> $iterator
+     * @param Iterator<string, SplFileInfo> $iterator
      */
-    public function __construct(\Iterator $iterator, string $baseDir)
+    public function __construct(Iterator $iterator, string $baseDir)
     {
         $this->baseDir = $this->normalizePath($baseDir);
 
@@ -106,16 +109,19 @@ final class IgnoredFilterIterator extends \FilterIterator
         return $parentDirectories;
     }
 
+    /**
+     * @return string[]
+     */
     private function parentDirectoriesUpTo(string $from, string $upTo): array
     {
         return array_filter(
             $this->parentDirectoriesUpwards($from),
-            static fn (string $directory): bool => str_starts_with($directory, $upTo)
+            static fn (string $directory): bool => str_starts_with($directory, $upTo),
         );
     }
 
     /**
-     * @return list<string>
+     * @return string[]
      */
     private function parentDirectoriesDownwards(string $fileRealPath): array
     {
@@ -129,7 +135,7 @@ final class IgnoredFilterIterator extends \FilterIterator
      */
     private function readIgnoreFile(string $path): ?array
     {
-        if (\array_key_exists($path, $this->ignoreFilesCache)) {
+        if (array_key_exists($path, $this->ignoreFilesCache)) {
             return $this->ignoreFilesCache[$path];
         }
 
@@ -144,6 +150,10 @@ final class IgnoredFilterIterator extends \FilterIterator
         }
 
         $ignoreFileContent = file_get_contents($path);
+
+        if ($ignoreFileContent === false) {
+            return $this->ignoreFilesCache[$path] = null;
+        }
 
         return $this->ignoreFilesCache[$path] = [
             Gitignore::toRegex($ignoreFileContent),

@@ -61,6 +61,9 @@ class ExtractCraftTranslations
         'yaml' => ['yml', 'yaml'],
     ];
 
+    /**
+     * @var string[]
+     */
     private array $projectConfigSearchPatterns = [
         '/^elementSources.\S+?.\S+?.heading$/',
         '/fieldLayouts.\S+?.tabs.\S+?.elements.\S+?.label$/',
@@ -85,6 +88,9 @@ class ExtractCraftTranslations
         '/^commerce.emails.\S+?.name$/',
     ];
 
+    /**
+     * @var array<string, string[]>
+     */
     private array $projectConfigSearchPatternsAssoc = [
         '/^fields.\S+?.settings.columns.__assoc__.\S+?.1.__assoc__.\S+?.0$/' => ['heading'],
         '/^fields.\S+?.settings.entryTypes.\S+?.__assoc__.\S+?.0$/' => ['name'],
@@ -93,6 +99,9 @@ class ExtractCraftTranslations
         ],
     ];
 
+    /**
+     * @var string[]
+     */
     private array $projectConfigSearchPatternsTwig = [
         '/^entryTypes.\S+?.titleFormat$/',
         '/^commerce.emails.\S+?.subject$/',
@@ -120,9 +129,9 @@ class ExtractCraftTranslations
      * @param string $file Path to file
      * @param string $category Message category
      * @throws Exception if file don't exists or is a folder
-     * @return SortableTranslations|null All found translations
+     * @return SortableTranslations All found translations
      */
-    public function extractFromFile(string $file, ?string $category = null): ?SortableTranslations
+    public function extractFromFile(string $file, ?string $category = null): SortableTranslations
     {
         // Check if file exists or is a folder
         if (!file_exists($file) || is_dir($file)) {
@@ -141,7 +150,7 @@ class ExtractCraftTranslations
             return $this->extractFromTwig(file_get_contents($file) ?: '', $file, $category);
         } elseif (in_array($fileExtension, $this->extractors['yaml'])) {
             if (!$this->projectConfigPath || !Path::isBasePath($this->projectConfigPath, $file)) {
-                return null;
+                return SortableTranslations::create($category);
             }
 
             return $this->extractFromProjectConfig(file_get_contents($file) ?: '', $file, $category);
@@ -212,9 +221,9 @@ class ExtractCraftTranslations
         string $contents,
         string $file,
         ?string $category = null,
-    ): ?SortableTranslations {
+    ): SortableTranslations {
         if (!$this->projectConfigPath) {
-            return null;
+            throw new Exception('Project config path is missing');
         }
 
         $relativePath = substr($file, strlen($this->projectConfigPath) + 1);
@@ -308,11 +317,13 @@ class ExtractCraftTranslations
         /** @var StaticCall[] $translateFunctionCalls */
         $translateFunctionCalls = $nodeFinder->find($ast, function (Node $node) {
             if ($node instanceof StaticCall && $node->class instanceof Name && $node->name instanceof Identifier) {
-                return
-                    ($node->class->toString() === 'Craft' && (
-                        $node->name->toString() === 't' || $node->name->toString() === 'translate')
-                    ) ||
-                    ($node->class->toString() === 'Translation' && $node->name->toString() === 'prep');
+                if ($node->class->toString() === 'Craft') {
+                    if ($node->name->toString() === 't' || $node->name->toString() === 'translate') {
+                        return true;
+                    }
+                } elseif ($node->class->toString() === 'Translation' && $node->name->toString() === 'prep') {
+                    return true;
+                }
             }
 
             return false;
@@ -706,6 +717,10 @@ class ExtractCraftTranslations
         return $result;
     }
 
+    /**
+     * @param array<string, mixed> $array
+     * @param array<string, mixed> $result
+     */
     private function flattenConfigArray(array $array, string $path, array &$result): void
     {
         foreach ($array as $key => $value) {
