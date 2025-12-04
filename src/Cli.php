@@ -38,6 +38,7 @@ class Cli
      */
     public function extract(
         string $source,
+        bool $ignoreProjectConfig,
         string $outputFile = 'translations.pot',
         ?string $category = null,
     ): bool {
@@ -45,7 +46,7 @@ class Cli
         $baseReferencePath = is_dir($source) ? $source : dirname($source);
         $extractCraftTranslations = new ExtractCraftTranslations(
             baseReferencePath: $baseReferencePath,
-            projectConfigPath: $this->getProjectConfigPath($baseReferencePath),
+            projectConfigPath: $ignoreProjectConfig ? null : $this->getProjectConfigPath($baseReferencePath),
         );
 
         if (is_dir($source)) {
@@ -84,6 +85,7 @@ class Cli
     public function update(
         string $inputOutputFile,
         string $source,
+        bool $ignoreProjectConfig,
         ?string $category = null,
     ): bool {
         // Get loader and generator
@@ -97,7 +99,7 @@ class Cli
         $baseReferencePath = is_dir($source) ? $source : dirname($source);
         $extractCraftTranslations = new ExtractCraftTranslations(
             baseReferencePath: $baseReferencePath,
-            projectConfigPath: $this->getProjectConfigPath($baseReferencePath),
+            projectConfigPath: $ignoreProjectConfig ? null : $this->getProjectConfigPath($baseReferencePath),
         );
 
         if (is_dir($source)) {

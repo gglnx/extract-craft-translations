@@ -31,8 +31,8 @@ $cli = new Cli();
 
 // Create CLI application
 $app = new Silly\Application('extract-craft-translations');
-$app->command('extract [-o|--output-file=] [-c|--category=] source', [$cli, 'extract']);
-$app->command('update [-c|--category=] input-output-file source', [$cli, 'update']);
+$app->command('extract [--ignore-project-config] [-o|--output-file=] [-c|--category=] source', [$cli, 'extract']);
+$app->command('update [--ignore-project-config] [-c|--category=] input-output-file source', [$cli, 'update']);
 $app->command('convert input-file output-file', [$cli, 'convert']);
 $app->command('merge [-o|--output-file=] [--format=] [-c|--category=] input-files*', [$cli, 'merge']);
 $app->run();
