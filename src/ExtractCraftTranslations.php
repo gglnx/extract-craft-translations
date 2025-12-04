@@ -273,7 +273,7 @@ class ExtractCraftTranslations
             foreach ($this->projectConfigSearchPatternsTwig as $searchPattern) {
                 if (preg_match($searchPattern, $path)) {
                     $twigTranslations = $this->extractFromTwig($value, $file, $category);
-                    $translations->mergeWith($twigTranslations);
+                    $translations = $translations->mergeWith($twigTranslations);
                 }
             }
         }
