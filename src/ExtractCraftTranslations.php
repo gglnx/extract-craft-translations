@@ -73,7 +73,11 @@ class ExtractCraftTranslations
         '/^fields.\S+?.settings.offLabel$/',
         '/^fields.\S+?.settings.onLabel$/',
         '/^fields.\S+?.settings.placeholder$/',
-        '/^formie.stencils.\S+?.name$/',
+        '/^users.groups.\S+?.name$/',
+        '/^commerce.lineItemStatuses.\S+?.name$/',
+        '/^commerce.orderStatuses.\S+?.name$/',
+        '/^commerce.gateways.\S+?.name$/',
+        '/^commerce.emails.\S+?.name$/',
     ];
 
     private array $projectConfigSearchPatternsAssoc = [
@@ -86,6 +90,11 @@ class ExtractCraftTranslations
 
     private array $projectConfigSearchPatternsTwig = [
         '/^entryTypes.\S+?.titleFormat$/',
+        '/^commerce.emails.\S+?.subject$/',
+        '/^commerce.emails.\S+?.replyTo$/',
+        '/^commerce.emails.\S+?.to$/',
+        '/^commerce.emails.\S+?.cc$/',
+        '/^commerce.emails.\S+?.bcc$/',
     ];
 
     /**
