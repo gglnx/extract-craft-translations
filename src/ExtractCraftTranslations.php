@@ -281,7 +281,7 @@ class ExtractCraftTranslations
 
         // Get parser and node finder
         $nodeFinder = new NodeFinder();
-        $parser = (new ParserFactory())->create(ParserFactory::PREFER_PHP7);
+        $parser = (new ParserFactory())->createForNewestSupportedVersion();
         $ast = $parser->parse($contents) ?? [];
 
         // Find all translation function calls
@@ -422,8 +422,12 @@ class ExtractCraftTranslations
      * @param string $category Message category
      * @return SortableTranslations All translations
      */
-    private function extractFromTwig(string $contents, string $file, ?string $category = null): SortableTranslations
-    {
+    private function extractFromTwig(
+        string $contents,
+        string $file,
+        ?string $category = null,
+        int $startLineNumber = 1,
+    ): SortableTranslations {
         // Get matches per extension
         $translations = SortableTranslations::create($category);
 
@@ -442,7 +446,7 @@ class ExtractCraftTranslations
             // Get registerTranslations values
             if ($token->test(Token::NAME_TYPE, 'registerTranslations')) {
                 // Open function
-                $stream->expect(Token::PUNCTUATION_TYPE, '(');
+                $stream->expect(Token::OPERATOR_TYPE, '(');
 
                 // Check for category
                 $categoryToken = $stream->next();
@@ -452,11 +456,11 @@ class ExtractCraftTranslations
 
                 // Open array
                 $stream->expect(Token::PUNCTUATION_TYPE, ',');
-                $stream->expect(Token::PUNCTUATION_TYPE, '[');
+                $stream->expect(Token::OPERATOR_TYPE, '[');
 
                 /** @var bool $first */
                 $first = true;
-                while (!$stream->test(Token::PUNCTUATION_TYPE, ']')) {
+                while (!$stream->test(Token::OPERATOR_TYPE, ']')) {
                     // Check for array correctness
                     if (!$first) {
                         $stream->expect(Token::PUNCTUATION_TYPE, ',');
@@ -523,7 +527,7 @@ class ExtractCraftTranslations
                 translations: $translations,
                 message: $message,
                 file: $file,
-                lineNumber: $this->getLineNumber($contents, $position),
+                lineNumber: $startLineNumber - 1 + $this->getLineNumber($contents, $position),
             );
         }
 
