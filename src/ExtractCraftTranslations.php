@@ -18,7 +18,7 @@ use Peast\Syntax\Node\Node as PeastNode;
 use Peast\Syntax\Node\StringLiteral;
 use Peast\Traverser;
 use PhpParser\Node;
-use PhpParser\Node\Arg;
+use PhpParser\Node\Expr;
 use PhpParser\Node\Expr\Array_;
 use PhpParser\Node\Expr\BinaryOp\Concat;
 use PhpParser\Node\Expr\MethodCall;
@@ -26,7 +26,6 @@ use PhpParser\Node\Expr\StaticCall;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
 use PhpParser\Node\Scalar\String_;
-use PhpParser\Node\VariadicPlaceholder;
 use PhpParser\NodeFinder;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitor;
@@ -332,42 +331,21 @@ class ExtractCraftTranslations
         // Convert to translations
         foreach ($translateFunctionCalls as $translateFunctionCall) {
             // Get category
-            $messageCategory = $this->defaultCategory;
-            if (
-                $translateFunctionCall->args[0] instanceof Arg &&
-                $translateFunctionCall->args[0]->value instanceof String_
-            ) {
-                $messageCategory = (string) $translateFunctionCall->args[0]->value->value;
-            }
+            $messageCategoryArg = $translateFunctionCall->getArg('category', 0);
+            $messageCategory = $this->resolveString($messageCategoryArg?->value) ?? $this->defaultCategory;
 
             // Get message
-            $messageArg = $translateFunctionCall->args[1];
+            $messageArg = $translateFunctionCall->getArg('message', 1);
+            $message = $this->resolveString($messageArg?->value);
 
-            if ($messageArg instanceof VariadicPlaceholder) {
-                continue;
+            if ($message && $category === $messageCategory) {
+                $this->addTranslation(
+                    translations: $translations,
+                    message: $message,
+                    file: $file,
+                    lineNumber: $translateFunctionCall->class->getStartLine(),
+                );
             }
-
-            $message = null;
-
-            if ($messageArg->value instanceof String_) {
-                $message = $messageArg->value->value;
-            }
-
-            if ($messageArg->value instanceof Concat) {
-                $message = $this->resolveConcatedStrings($messageArg->value);
-            }
-
-            // Skip if message is empty or category doesn't matches
-            if (!$message || $category && $category !== $messageCategory) {
-                continue;
-            }
-
-            $this->addTranslation(
-                translations: $translations,
-                message: $message,
-                file: $file,
-                lineNumber: $translateFunctionCall->class->getStartLine(),
-            );
         }
 
         // Multiple
@@ -381,47 +359,26 @@ class ExtractCraftTranslations
         // Convert to translations
         foreach ($registerTranslationsCalls as $registerTranslationsCall) {
             // Get category
-            $messageCategory = $this->defaultCategory;
-            if (
-                $registerTranslationsCall->args[0] instanceof Arg &&
-                $registerTranslationsCall->args[0]->value instanceof String_
-            ) {
-                $messageCategory = (string) $registerTranslationsCall->args[0]->value->value;
-            }
+            $messageCategoryArg = $registerTranslationsCall->getArg('category', 0);
+            $messageCategory = $this->resolveString($messageCategoryArg?->value) ?? $this->defaultCategory;
 
             // Skip if category doesn't matches
-            if ($category && $category !== $messageCategory) {
+            if ($category !== $messageCategory) {
                 continue;
             }
 
             // Get messages
-            if (isset($registerTranslationsCall->args[1])) {
-                $messagesArg = $registerTranslationsCall->args[1];
+            $messagesArg = $registerTranslationsCall->getArg('messages', 1);
 
-                if ($messagesArg instanceof VariadicPlaceholder) {
-                    continue;
-                }
-
-                if ($messagesArg->value instanceof Array_) {
-                    foreach ($messagesArg->value->items as $item) {
-                        $message = null;
-
-                        if ($item->value instanceof String_) {
-                            $message = $item->value->value;
-                        }
-
-                        if ($item->value instanceof Concat) {
-                            $message = $this->resolveConcatedStrings($item->value);
-                        }
-
-                        if ($message) {
-                            $this->addTranslation(
-                                translations: $translations,
-                                message: $message,
-                                file: $file,
-                                lineNumber: $item->getStartLine(),
-                            );
-                        }
+            if ($messagesArg?->value instanceof Array_) {
+                foreach ($messagesArg->value->items as $item) {
+                    if ($message = $this->resolveString($item->value)) {
+                        $this->addTranslation(
+                            translations: $translations,
+                            message: $message,
+                            file: $file,
+                            lineNumber: $item->getStartLine(),
+                        );
                     }
                 }
             }
@@ -447,7 +404,7 @@ class ExtractCraftTranslations
         $traverser->traverse($ast);
 
         foreach ($visitor->foundNodes as $node) {
-            $stringContents = $node instanceof Concat ? $this->resolveConcatedStrings($node) : $node->value;
+            $stringContents = $this->resolveString($node);
 
             if (empty($stringContents)) {
                 continue;
@@ -689,32 +646,40 @@ class ExtractCraftTranslations
     }
 
     /**
-     * Resolves concacted strings
+     * Resolves a maybe concated string
      *
-     * @param Concat $node
+     * @param Expr|null $node
      * @return null|string
      */
-    private function resolveConcatedStrings(Concat $node): ?string
+    private function resolveString(?Expr $node): ?string
     {
-        $result = '';
-
-        if ($node->left instanceof String_) {
-            $result .= $node->left->value;
-        } elseif ($node->left instanceof Concat) {
-            $result .= $this->resolveConcatedStrings($node->left);
-        } else {
-            return null;
+        if ($node instanceof String_) {
+            return $node->value;
         }
 
-        if ($node->right instanceof String_) {
-            $result .= $node->right->value;
-        } elseif ($node->right instanceof Concat) {
-            $result .= $this->resolveConcatedStrings($node->right);
-        } else {
-            return null;
+        if ($node instanceof Concat) {
+            $result = '';
+
+            if ($node->left instanceof String_) {
+                $result .= $node->left->value;
+            } elseif ($node->left instanceof Concat) {
+                $result .= $this->resolveString($node->left);
+            } else {
+                return null;
+            }
+
+            if ($node->right instanceof String_) {
+                $result .= $node->right->value;
+            } elseif ($node->right instanceof Concat) {
+                $result .= $this->resolveString($node->right);
+            } else {
+                return null;
+            }
+
+            return $result;
         }
 
-        return $result;
+        return null;
     }
 
     /**
